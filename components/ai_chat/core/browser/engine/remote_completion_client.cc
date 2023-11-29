@@ -75,6 +75,7 @@ base::Value::Dict CreateApiParametersDict(
   DCHECK(!model_name.empty());
 
   dict.Set("prompt", prompt);
+  LOG(ERROR) << "prompt: " << prompt;
   dict.Set("max_tokens_to_sample", 600);
   dict.Set("temperature", temp);
   dict.Set("top_k", -1);  // disabled
