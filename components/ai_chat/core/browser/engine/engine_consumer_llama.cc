@@ -161,8 +161,14 @@ std::string BuildLlama2GenerateQuestionsPrompt(bool is_video,
 std::string BuildLlama2Prompt(
     const std::vector<ConversationTurn>& conversation_history,
     std::string page_content,
+    const bool& is_page_content_truncated,
     const bool& is_video,
     const std::string user_message) {
+
+  int mode = 0; // prepend
+//   int mode = 1; // append
+//   int mode = 2; // seed
+
   // Always use a generic system message
   std::string system_message =
       l10n_util::GetStringUTF8(IDS_AI_CHAT_LLAMA2_SYSTEM_MESSAGE_GENERIC);
@@ -187,10 +193,12 @@ std::string BuildLlama2Prompt(
     std::string first_message_template;
     if (is_video) {
       first_message_template =
-          l10n_util::GetStringUTF8(IDS_AI_CHAT_LLAMA2_VIDEO_PROMPT_SEGMENT);
+          l10n_util::GetStringUTF8(is_page_content_truncated && mode == 0 ? IDS_AI_CHAT_LLAMA2_PARTIAL_VIDEO_PROMPT_SEGMENT
+                                                                          : IDS_AI_CHAT_LLAMA2_VIDEO_PROMPT_SEGMENT);
     } else {
       first_message_template =
-          l10n_util::GetStringUTF8(IDS_AI_CHAT_LLAMA2_ARTICLE_PROMPT_SEGMENT);
+          l10n_util::GetStringUTF8(is_page_content_truncated && mode == 0 ? IDS_AI_CHAT_LLAMA2_PARTIAL_ARTICLE_PROMPT_SEGMENT
+                                                                           : IDS_AI_CHAT_LLAMA2_ARTICLE_PROMPT_SEGMENT);
     }
     first_user_message = base::ReplaceStringPlaceholders(
         first_message_template, {page_content, raw_first_user_message},
@@ -201,18 +209,40 @@ std::string BuildLlama2Prompt(
     first_user_message = raw_first_user_message;
   }
 
+  std::string content_truncation_aware_message;
+  std::string content_truncation_aware_seed;
+  if (is_page_content_truncated && mode == 1) {
+    content_truncation_aware_message =
+        base::StrCat({
+            l10n_util::GetStringUTF8(IDS_AI_CHAT_LLAMA2_TRUNCATION_SEED),
+            " ",
+            first_user_message});
+  } else {
+    content_truncation_aware_message = first_user_message;
+  }
+
+  if (is_page_content_truncated && mode == 2) {
+    content_truncation_aware_seed = base::StrCat({
+        l10n_util::GetStringUTF8(IDS_AI_CHAT_LLAMA2_TRUNCATION_SEED),
+        " ",
+        l10n_util::GetStringUTF8(IDS_AI_CHAT_LLAMA2_GENERAL_SEED)
+        });
+  } else {
+    content_truncation_aware_seed = l10n_util::GetStringUTF8(IDS_AI_CHAT_LLAMA2_GENERAL_SEED);
+  }
+
   // If there's no conversation history, then we just send a (partial)
   // first sequence.
   if (conversation_history.empty() || conversation_history.size() <= 1) {
     return BuildLlama2FirstSequence(
-        today_system_message, first_user_message, absl::nullopt,
-        l10n_util::GetStringUTF8(IDS_AI_CHAT_LLAMA2_GENERAL_SEED));
+        today_system_message, content_truncation_aware_message, absl::nullopt,
+        content_truncation_aware_seed);
   }
 
   // Use the first two messages to build the first sequence,
   // which includes the system prompt.
   std::string prompt =
-      BuildLlama2FirstSequence(today_system_message, first_user_message,
+      BuildLlama2FirstSequence(today_system_message, content_truncation_aware_message,
                                conversation_history[1].text, absl::nullopt);
 
   // Loop through the rest of the history two at a time building subsequent
@@ -227,7 +257,7 @@ std::string BuildLlama2Prompt(
   // Build the final subsequent exchange using the current turn.
   prompt += BuildLlama2SubsequentSequence(
       user_message, absl::nullopt,
-      l10n_util::GetStringUTF8(IDS_AI_CHAT_LLAMA2_GENERAL_SEED));
+      content_truncation_aware_seed);
 
   // Trimming recommended by Meta
   // https://huggingface.co/meta-llama/Llama-2-13b-chat#intended-use
@@ -339,8 +369,11 @@ void EngineConsumerLlamaRemote::GenerateAssistantResponse(
     GenerationCompletedCallback completed_callback) {
   const std::string& truncated_page_content =
       page_content.substr(0, max_page_content_length_);
+  const bool is_page_content_truncated =
+      truncated_page_content.length() < page_content.length();;
   std::string prompt = BuildLlama2Prompt(
-      conversation_history, truncated_page_content, is_video, human_input);
+      conversation_history, truncated_page_content,
+      is_page_content_truncated, is_video, human_input);
   DCHECK(api_);
   api_->QueryPrompt(prompt, {"</response>"}, std::move(completed_callback),
                     std::move(data_received_callback));
